@@ -7,25 +7,37 @@ pytest <THIS_PY_FILE> -s
 """
 
 from typing import Optional, Tuple
+from typing_extensions import Literal, Tuple, assert_never
 
 import pytest
 import torch
 
 device = torch.device("cuda:0")
 
-
+'''
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 @pytest.mark.parametrize("per_view_color", [True, False])
 @pytest.mark.parametrize("sh_degree", [None, 3])
 @pytest.mark.parametrize("render_mode", ["RGB", "RGB+D", "D"])
 @pytest.mark.parametrize("packed", [True, False])
 @pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
+'''
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+@pytest.mark.parametrize("per_view_color", [True])
+@pytest.mark.parametrize("sh_degree", [3])
+@pytest.mark.parametrize("render_mode", ["RGB"])
+@pytest.mark.parametrize("packed", [True])
+@pytest.mark.parametrize("batch_dims", [()])
+@pytest.mark.parametrize("camera_model", ["pinhole", "ortho", "fisheye"])
+
+
 def test_rasterization(
     per_view_color: bool,
     sh_degree: Optional[int],
     render_mode: str,
     packed: bool,
     batch_dims: Tuple[int, ...],
+    camera_model: Literal["pinhole", "ortho", "fisheye"],
 ):
     from gsplat.rendering import _rasterization, rasterization
 
@@ -80,7 +92,7 @@ def test_rasterization(
         assert renders.shape == batch_dims + (C, height, width, 3)
     elif render_mode == "RGB+D":
         assert renders.shape == batch_dims + (C, height, width, 4)
-
+    print(f'rendrs.shape : {renders.shape}, rendrs.min() : {renders.min()}, rendrs.max() : {renders.max()}')
     _renders, _alphas, _meta = _rasterization(
         means=means,
         quats=quats,

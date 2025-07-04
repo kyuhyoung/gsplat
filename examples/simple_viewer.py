@@ -19,6 +19,7 @@ from gsplat_viewer import GsplatViewer, GsplatRenderTabState
 
 
 def main(local_rank: int, world_rank, world_size: int, args):
+    #print(f'world_size : {world_size}');    exit(1)
     torch.manual_seed(42)
     device = torch.device("cuda", local_rank)
 
@@ -54,7 +55,7 @@ def main(local_rank: int, world_rank, world_size: int, args):
         C = len(viewmats)
         N = len(means)
         print("rank", world_rank, "Number of Gaussians:", N, "Number of Cameras:", C)
-
+        '''
         # batched render
         for _ in tqdm.trange(1):
             render_colors, render_alphas, meta = rasterization(
@@ -67,18 +68,22 @@ def main(local_rank: int, world_rank, world_size: int, args):
                 Ks,  # [C, 3, 3]
                 width,
                 height,
-                render_mode="RGB+D",
+                #render_mode="RGB+D",
+                render_mode="RGB",
                 packed=False,
                 distributed=world_size > 1,
+                #camera_model='ortho',
             )
+
         C = render_colors.shape[0]
-        assert render_colors.shape == (C, height, width, 4)
+        #assert render_colors.shape == (C, height, width, 4)
+        assert render_colors.shape == (C, height, width, 3)
         assert render_alphas.shape == (C, height, width, 1)
         render_colors.sum().backward()
 
         render_rgbs = render_colors[..., 0:3]
-        render_depths = render_colors[..., 3:4]
-        render_depths = render_depths / render_depths.max()
+        #render_depths = render_colors[..., 3:4]
+        #render_depths = render_depths / render_depths.max()
 
         # dump batch images
         os.makedirs(args.output_dir, exist_ok=True)
@@ -86,8 +91,8 @@ def main(local_rank: int, world_rank, world_size: int, args):
             torch.cat(
                 [
                     render_rgbs.reshape(C * height, width, 3),
-                    render_depths.reshape(C * height, width, 1).expand(-1, -1, 3),
-                    render_alphas.reshape(C * height, width, 1).expand(-1, -1, 3),
+                    #render_depths.reshape(C * height, width, 1).expand(-1, -1, 3),
+                    #render_alphas.reshape(C * height, width, 1).expand(-1, -1, 3),
                 ],
                 dim=1,
             )
@@ -99,6 +104,56 @@ def main(local_rank: int, world_rank, world_size: int, args):
             f"{args.output_dir}/render_rank{world_rank}.png",
             (canvas * 255).astype(np.uint8),
         )
+
+
+        '''
+        for cam_model in ['pinhole', 'ortho', 'fisheye']:
+            render_colors, render_alphas, meta = rasterization(
+                means,  # [N, 3]
+                quats,  # [N, 4]
+                scales,  # [N, 3]
+                opacities,  # [N]
+                colors,  # [N, S, 3]
+                viewmats,  # [C, 4, 4]
+                Ks,  # [C, 3, 3]
+                width,
+                height,
+                #render_mode="RGB+D",
+                render_mode="RGB",
+                packed=False,
+                distributed=world_size > 1,
+                camera_model = cam_model,
+            )
+
+            C = render_colors.shape[0]
+            #assert render_colors.shape == (C, height, width, 4)
+            assert render_colors.shape == (C, height, width, 3)
+            assert render_alphas.shape == (C, height, width, 1)
+            render_colors.sum().backward()
+
+            render_rgbs = render_colors[..., 0:3]
+            #render_depths = render_colors[..., 3:4]
+            #render_depths = render_depths / render_depths.max()
+
+            # dump batch images
+            os.makedirs(args.output_dir, exist_ok=True)
+            canvas = (
+                torch.cat(
+                [
+                    render_rgbs.reshape(C * height, width, 3),
+                    #render_depths.reshape(C * height, width, 1).expand(-1, -1, 3),
+                    #render_alphas.reshape(C * height, width, 1).expand(-1, -1, 3),
+                ],
+                dim=1,
+                )
+                .detach()
+                .cpu()
+                .numpy()
+            )
+            imageio.imsave(
+                f"{args.output_dir}/render_rank_{world_rank}_{cam_model}.png",
+                (canvas * 255).astype(np.uint8),
+            )
     else:
         means, quats, scales, opacities, sh0, shN = [], [], [], [], [], []
         for ckpt_path in args.ckpt:

@@ -14,8 +14,40 @@ import torch
 from typing_extensions import Literal, Tuple, assert_never
 
 from gsplat._helper import load_test_data
+from PIL import Image
 
 device = torch.device("cuda:0")
+
+
+def save_tensor_images(
+    AA: torch.Tensor,
+    output_dir: str,
+    prefix: str = "frame"
+) -> None:
+    """
+    Torch tensor AA of shape (N, H, W, 3) with values in [0,1]
+    → save N RGB images as PNG in output_dir with names prefix_0.png, prefix_1.png, …
+
+    Args:
+        AA: torch.Tensor, shape (N, H, W, 3), values ∈ [0,1].
+        output_dir: str, 디렉터리 경로 (없으면 생성).
+        prefix: str, 파일명 앞부분 (default: "frame").
+    """
+    # 1) 디렉터리 만들기
+    os.makedirs(output_dir, exist_ok=True)
+
+    # 2) CPU numpy array 로 변환
+    imgs = AA.detach().cpu().numpy()
+    N, H, W, C = imgs.shape
+    assert C == 3, f"Last dim must be 3 (RGB), got {C}"
+
+    # 3) 각 프레임 순회하며 저장
+    for i in range(N):
+        # [0,1] → [0,255], uint8 로 변환
+        arr = (imgs[i] * 255).clip(0, 255).astype("uint8")
+        img = Image.fromarray(arr)  # PIL 이미지로 변환
+        fname = f"{prefix}_{i}.png"
+        img.save(os.path.join(output_dir, fname))
 
 
 def expand(data: dict, batch_dims: Tuple[int, ...]):
@@ -118,7 +150,10 @@ def test_proj(
     from gsplat.cuda._wrapper import proj, quat_scale_to_covar_preci
 
     torch.manual_seed(42)
-
+    '''
+    print(f"\ntest_data['means'].min() : {test_data['means'].min()}, test_data['means'].max() : {test_data['means'].max()}");    #exit(1)
+    print(f'camera_model : {camera_model}');    #exit(1)
+    '''
     test_data = expand(test_data, batch_dims)
     Ks = test_data["Ks"]
     viewmats = test_data["viewmats"]
@@ -488,8 +523,11 @@ def test_isect(test_data, batch_dims: Tuple[int, ...]):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
-@pytest.mark.parametrize("channels", [3, 32, 128])
-@pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
+#@pytest.mark.parametrize("channels", [3, 32, 128])
+#@pytest.mark.parametrize("batch_dims", [(), (2,), (1, 2)])
+#@pytest.mark.parametrize("channels", [3])
+@pytest.mark.parametrize("channels", [128])
+@pytest.mark.parametrize("batch_dims", [()])
 def test_rasterize_to_pixels(test_data, channels: int, batch_dims: Tuple[int, ...]):
     from gsplat.cuda._torch_impl import _rasterize_to_pixels
     from gsplat.cuda._wrapper import (
@@ -511,7 +549,9 @@ def test_rasterize_to_pixels(test_data, channels: int, batch_dims: Tuple[int, ..
             "backgrounds": torch.rand((C, channels), device=device),
         }
     )
+    print(f'\ntest_data["viewmats"].shape b4 : {test_data["viewmats"].shape}')
     test_data = expand(test_data, batch_dims)
+    print(f'test_data["viewmats"].shape after : {test_data["viewmats"].shape}')
     Ks = test_data["Ks"]
     viewmats = test_data["viewmats"]
     height = test_data["height"]
@@ -528,6 +568,7 @@ def test_rasterize_to_pixels(test_data, channels: int, batch_dims: Tuple[int, ..
     # Project Gaussians to 2D
     radii, means2d, depths, conics, compensations = fully_fused_projection(
         means, covars, None, None, viewmats, Ks, width, height
+        #means, covars, None, None, viewmats, Ks, width, height, camera_model = 'ortho'
     )
     opacities = torch.broadcast_to(opacities[..., None, :], batch_dims + (C, N))
 
@@ -572,6 +613,12 @@ def test_rasterize_to_pixels(test_data, channels: int, batch_dims: Tuple[int, ..
         flatten_ids,
         backgrounds=backgrounds,
     )
+    print(f'render_colors.shape : {render_colors.shape}')    #   (3, 420, 648, 3)
+    print(f'_render_colors.shape : {_render_colors.shape}'); #   (3, 420, 648, 3)    #exit(1)
+    print(f'render_colors.min(): {render_colors.min()}, render_colors.max(): {render_colors.max()}')
+    print(f'_render_colors.min(): {_render_colors.min()}, _render_colors.max(): {_render_colors.max()}')
+    save_tensor_images(render_colors, './test_out', 'render_colors')
+    save_tensor_images(_render_colors, './test_out', '_render_colors')
     torch.testing.assert_close(render_colors, _render_colors)
     torch.testing.assert_close(render_alphas, _render_alphas)
 

@@ -360,6 +360,7 @@ def fully_fused_projection(
 
     viewmats = viewmats.contiguous()
     Ks = Ks.contiguous()
+    #print(f'packed : {packed}');    exit(1)
     if packed:
         return _FullyFusedProjectionPacked.apply(
             means,
@@ -1006,7 +1007,7 @@ class _FullyFusedProjection(torch.autograd.Function):
         camera_model_type = _make_lazy_cuda_obj(
             f"CameraModelType.{camera_model.upper()}"
         )
-
+        print(f'camera_model_type: {camera_model_type}');   exit(1)
         # "covars" and {"quats", "scales"} are mutually exclusive
         radii, means2d, depths, conics, compensations = _make_lazy_cuda_func(
             "projection_ewa_3dgs_fused_fwd"

@@ -259,7 +259,7 @@ def rasterization(
 
     """
     meta = {}
-
+    #print(f'with_eval3d : {with_eval3d}');    exit(1)
     batch_dims = means.shape[:-2]
     num_batch_dims = len(batch_dims)
     B = math.prod(batch_dims)
@@ -373,7 +373,7 @@ def rasterization(
 
         # Silently change C from local #Cameras to global #Cameras.
         C = len(viewmats)
-
+    #print(f'with_ut : {with_ut}');  exit(1)
     if with_ut:
         proj_results = fully_fused_projection_with_ut(
             means,

@@ -44,7 +44,9 @@ def load_test_data(
     grid = torch.stack([gridx, gridy, torch.zeros_like(gridx)], dim=-1).reshape(-1, 3)
     means = means[None, :, :] + grid[:, None, :] * edges[None, None, :]
     means = means.reshape(-1, 3)
+    #print(f'colors.shape b4 : {colors.shape}')
     colors = colors.repeat(repeats**2, 1)
+    #print(f'colors.shape after : {colors.shape}');  exit(1)
 
     # create gaussian attributes
     N = len(means)
