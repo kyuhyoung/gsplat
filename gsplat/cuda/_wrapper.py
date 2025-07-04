@@ -1007,8 +1007,10 @@ class _FullyFusedProjection(torch.autograd.Function):
         camera_model_type = _make_lazy_cuda_obj(
             f"CameraModelType.{camera_model.upper()}"
         )
-        print(f'camera_model_type: {camera_model_type}');   exit(1)
+        #print(f'camera_model_type: {camera_model_type}');   exit(1) #   CameraModelType.PINHOLE
         # "covars" and {"quats", "scales"} are mutually exclusive
+        #print(f'means.shape : {means.shape}, means.min() : {means.min()}, means.max() : {means.max()}');  exit(1)
+        #   (111785, 3),  -1.9999, 1.9999
         radii, means2d, depths, conics, compensations = _make_lazy_cuda_func(
             "projection_ewa_3dgs_fused_fwd"
         )(

@@ -461,6 +461,7 @@ def rasterization(
     )
 
     # Turn colors into [..., C, N, D] or [..., nnz, D] to pass into rasterize_to_pixels()
+    print(f'sh_degree : {sh_degree}');  exit(1)
     if sh_degree is None:
         # Colors are post-activation values, with shape [..., N, D] or [..., C, N, D]
         if packed:
@@ -1502,6 +1503,7 @@ def rasterization_2dgs(
     # else:
     #     if packed:
     #         colors = colors.view(B, C, N, -1)[batch_ids, camera_ids, gaussian_ids, :]
+    #print(f'sh_degree : {sh_degree}');  exit(1)
     if sh_degree is not None:  # SH coefficients
         camtoworlds = torch.inverse(viewmats)
         if packed:

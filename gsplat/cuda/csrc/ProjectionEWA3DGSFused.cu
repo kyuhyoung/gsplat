@@ -90,7 +90,8 @@ __global__ void projection_ewa_3dgs_fused_fwd_kernel(
             covars[4],
             covars[5] // 3rd column
         );
-    } else {
+    } 
+    else {
         // compute from quaternions and scales
         quats += bid * N * 4 + gid * 4;
         scales += bid * N * 3 + gid * 3;

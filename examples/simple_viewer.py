@@ -51,7 +51,8 @@ def main(local_rank: int, world_rank, world_size: int, args):
         viewmats = viewmats[world_rank::world_size][:1].contiguous()
         Ks = Ks[world_rank::world_size][:1].contiguous()
 
-        sh_degree = None
+        #sh_degree = None
+        sh_degree = 3
         C = len(viewmats)
         N = len(means)
         print("rank", world_rank, "Number of Gaussians:", N, "Number of Cameras:", C)
@@ -123,6 +124,7 @@ def main(local_rank: int, world_rank, world_size: int, args):
                 packed=False,
                 distributed=world_size > 1,
                 camera_model = cam_model,
+                sh_degree = sh_degree
             )
 
             C = render_colors.shape[0]
