@@ -1,5 +1,6 @@
 import json
-import os
+import os, sys
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'third_party', 'pycolmap')))
 from typing import Any, Dict, List, Optional
 
 import cv2
@@ -71,6 +72,7 @@ class Parser:
         colmap_dir = os.path.join(data_dir, "sparse/0/")
         if not os.path.exists(colmap_dir):
             colmap_dir = os.path.join(data_dir, "sparse")
+        #print(f'colmap_dir : {colmap_dir}');    exit(1)
         assert os.path.exists(
             colmap_dir
         ), f"COLMAP directory {colmap_dir} does not exist."
@@ -345,6 +347,7 @@ class Parser:
         camera_locations = camtoworlds[:, :3, 3]
         scene_center = np.mean(camera_locations, axis=0)
         dists = np.linalg.norm(camera_locations - scene_center, axis=1)
+        pr
         self.scene_scale = np.max(dists)
 
 

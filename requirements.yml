@@ -12,6 +12,8 @@ dependencies:
   - blas=1.0=mkl
   - blosc=1.21.3=h6a678d5_0
   - boost-cpp=1.82.0=hdb19cb5_2
+  #- boost-cpp=1.86.*
+  #- boost-cpp=1.78.*
   - bottleneck=1.4.2=py311hf4808d0_0
   - branca=0.6.0=py311h06a4308_0
   - brotli-python=1.0.9=py311h6a678d5_9
@@ -60,6 +62,7 @@ dependencies:
   - libev=4.33=h7f8727e_1
   - libffi=3.4.4=h6a678d5_1
   - libgcc-ng=11.2.0=h1234567_1
+  #- libgcc-ng>=12.4
   - libgdal=3.6.2=he9acc32_9
   - libgfortran-ng=11.2.0=h00389a5_1
   - libgfortran5=11.2.0=h1234567_1
@@ -113,6 +116,7 @@ dependencies:
   - pyproj=3.6.1=py311h76fdc58_1
   - pysocks=1.7.1=py311h06a4308_0
   - python=3.11.11=he870216_0
+  #- python=3.11
   - python-dateutil=2.9.0post0=py311h06a4308_2
   - python-tzdata=2023.3=pyhd3eb1b0_0
   - pytz=2024.1=py311h06a4308_0
@@ -144,7 +148,15 @@ dependencies:
   - kornia  
   - transformers 
   - pytest
+  #- tensorboard
+  #- cudatoolkit=11.2
+  #- cudatoolkit=10.2
+  #- pycolmap
+  #- pycolmap=0.3.0
   - pip:
+    #- pycolmap
+    #- git+https://github.com/rmbrualla/pycolmap@cc7ea4b7301720ac29287dbe450952511b32125e#egg=pycolmap
+    - tensorboard
     - splines
     - nerfview
     - viser

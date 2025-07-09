@@ -265,6 +265,7 @@ def rasterization(
     B = math.prod(batch_dims)
     N = means.shape[-2]
     C = viewmats.shape[-3]
+    #print(f'B : {B}, N : {N}, C : {C}');    exit(1)
     I = B * C
     device = means.device
     assert means.shape == batch_dims + (N, 3), means.shape
@@ -461,8 +462,12 @@ def rasterization(
     )
 
     # Turn colors into [..., C, N, D] or [..., nnz, D] to pass into rasterize_to_pixels()
-    print(f'sh_degree : {sh_degree}');  exit(1)
+    #print(f'sh_degree : {sh_degree}');  exit(1)
     if sh_degree is None:
+
+
+
+
         # Colors are post-activation values, with shape [..., N, D] or [..., C, N, D]
         if packed:
             if colors.dim() == num_batch_dims + 2:
@@ -472,6 +477,36 @@ def rasterization(
                 # Turn [..., C, N, D] into [nnz, D]
                 colors = colors.view(B, C, N, -1)[batch_ids, camera_ids, gaussian_ids]
         else:
+            '''
+            if "ortho" == camera_model:
+                cam_dir = torch.tensor([0, 0, 1], dtype = torch.float32, device = device)  
+                camera_dirs = cam_dir.unsqueeze(0).repeat(N, 1)
+                camtoworlds = torch.inverse(viewmats) 
+                print(f'camtoworlds[..., :3, :3].shape : {camtoworlds[..., :3, :3].shape}, camera_dirs.shape : {camera_dirs.shape}');   #exit(1) #   (1, 3, 3), (111785, 3) 
+                dirs = torch.einsum(
+                    "...rkj,ij->...rik", camtoworlds[..., :3, :3], camera_dirs
+                ) 
+                #print(f'dirs.shape : {dirs.shape}'); #exit(1)    #   (1, 111785, 3)
+                #print(f'dirs[0, :10, :] \n {dirs[0, :10, :]}'); exit(1)    #   (1, 111785, 3)
+            else:
+                campos = torch.inverse(viewmats)[..., :3, 3]  
+                #print(f'campos b4 : {campos}')
+                #   [[-1.060, -0.3324, 0.4843]]
+                if viewmats_rs is not None:
+                    campos_rs = torch.inverse(viewmats_rs)[..., :3, 3]
+                    campos = 0.5 * (campos + campos_rs)  # [..., C, 3]
+                #print(f'campos after : {campos}')
+                #   [[-1.060, -0.3324, 0.4843]]
+                #print(f'campos.shape : {campos.shape}') #   (1, 3)
+                #print(f'means.shape : {means.shape}') #   (111785, 3)
+                #t0 = means[..., None, :, :];    t1 = campos[..., None, :] 
+                #print(f't0.shape : {t0.shape}, t1.shape : {t1.shape}'); exit(1)
+                #   (1, 111785, 3), (1, 1, 3)
+                dirs = means[..., None, :, :] - campos[..., None, :]  # [..., C, N, 3]
+                #print(f'dirs.shape : {dirs.shape}'); exit(1)    #   (1, 111785, 3)
+                #print(f'dirs : {dirs}');    exit(1)
+                #print(f'dirs.device : {dirs.device}');    exit(1)   #   cuda.0
+            '''
             if colors.dim() == num_batch_dims + 2:
                 # Turn [..., N, D] into [..., C, N, D]
                 colors = torch.broadcast_to(
@@ -487,10 +522,26 @@ def rasterization(
             campos_rs = torch.inverse(viewmats_rs)[..., :3, 3]
             campos = 0.5 * (campos + campos_rs)  # [..., C, 3]
         if packed:
-            dirs = (
-                means.view(B, N, 3)[batch_ids, gaussian_ids]
-                - campos.view(B, C, 3)[batch_ids, camera_ids]
-            )  # [nnz, 3]
+            if "ortho" == camera_model:
+                camera_dirs = F.pad(
+                    torch.stack(
+                        [
+                            (x - cx[..., None, None] + 0.5) / fx[..., None, None],
+                            (y - cy[..., None, None] + 0.5) / fy[..., None, None],
+                        ],
+                        dim=-1,
+                    ),
+                    (0, 1),
+                    value=1.0,
+                )  
+                dirs = torch.einsum(
+                    "...ij,...hwj->...hwi", camtoworlds[..., :3, :3], camera_dirs
+                ) 
+            else:
+                dirs = (
+                    means.view(B, N, 3)[batch_ids, gaussian_ids]
+                    - campos.view(B, C, 3)[batch_ids, camera_ids]
+                )  # [nnz, 3]
             masks = (radii > 0).all(dim=-1)  # [nnz]
             if colors.dim() == num_batch_dims + 3:
                 # Turn [..., N, K, 3] into [nnz, 3]
@@ -502,7 +553,24 @@ def rasterization(
                 ]  # [nnz, K, 3]
             colors = spherical_harmonics(sh_degree, dirs, shs, masks=masks)  # [nnz, 3]
         else:
-            dirs = means[..., None, :, :] - campos[..., None, :]  # [..., C, N, 3]
+            if "ortho" == camera_model:
+                camera_dirs = F.pad(
+                    torch.stack(
+                        [
+                            (x - cx[..., None, None] + 0.5) / fx[..., None, None],
+                            (y - cy[..., None, None] + 0.5) / fy[..., None, None],
+                        ],
+                        dim=-1,
+                    ),
+                    (0, 1),
+                    value=1.0,
+                )  
+                dirs = torch.einsum(
+                    "...ij,...hwj->...hwi", camtoworlds[..., :3, :3], camera_dirs
+                ) 
+            else:
+                dirs = means[..., None, :, :] - campos[..., None, :]  # [..., C, N, 3]
+                #print(f'dirs : {dirs}');    exit(1)
             masks = (radii > 0).all(dim=-1)  # [..., C, N]
             if colors.dim() == num_batch_dims + 3:
                 # Turn [..., N, K, 3] into [..., C, N, K, 3]

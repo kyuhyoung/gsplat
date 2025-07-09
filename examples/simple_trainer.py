@@ -43,7 +43,8 @@ from nerfview import CameraState, RenderTabState, apply_float_colormap
 @dataclass
 class Config:
     # Disable viewer
-    disable_viewer: bool = False
+    #disable_viewer: bool = False
+    disable_viewer: bool = True
     # Path to the .pt files. If provide, it will skip training and run evaluation only.
     ckpt: Optional[List[str]] = None
     # Name of compression strategy to use
@@ -52,11 +53,12 @@ class Config:
     render_traj_path: str = "interp"
 
     # Path to the Mip-NeRF 360 dataset
-    data_dir: str = "data/360_v2/garden"
+    #data_dir: str = "data/360_v2/garden"
+    data_dir: str = "/data/samsung_dong_mini_5"
     # Downsample factor for the dataset
     data_factor: int = 4
     # Directory to save results
-    result_dir: str = "results/garden"
+    result_dir: str = "./results/samsung_dong_mini_5"
     # Every N images there is a test image
     test_every: int = 8
     # Random crop size for training  (experimental)
@@ -64,7 +66,8 @@ class Config:
     # A global scaler that applies to the scene size related parameters
     global_scale: float = 1.0
     # Normalize the world space
-    normalize_world_space: bool = True
+    #normalize_world_space: bool = True
+    normalize_world_space: bool = False
     # Camera model
     camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole"
 
@@ -345,7 +348,9 @@ class Runner:
         )
         self.valset = Dataset(self.parser, split="val")
         self.scene_scale = self.parser.scene_scale * 1.1 * cfg.global_scale
-        print("Scene scale:", self.scene_scale)
+        print("self.parser.scene_scale : ", self.parser.scene_scale)
+        print("cfg.global_scale : ", cfg.global_scale)
+        print("Scene scale:", self.scene_scale);    exit(1)
 
         # Model
         feature_dim = 32 if cfg.app_opt else None
@@ -1220,8 +1225,9 @@ if __name__ == "__main__":
                 strategy=MCMCStrategy(verbose=True),
             ),
         ),
-    }
+    }     
     cfg = tyro.extras.overridable_config_cli(configs)
+    #print(f'cfg : \n{cfg}');    exit(1)
     cfg.adjust_steps(cfg.steps_scaler)
 
     # Import BilateralGrid and related functions based on configuration

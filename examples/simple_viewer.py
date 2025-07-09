@@ -10,6 +10,7 @@ import torch.nn.functional as F
 import tqdm
 import viser
 from pathlib import Path
+from gsplat.exporter import sh2rgb
 from gsplat._helper import load_test_data
 from gsplat.distributed import cli
 from gsplat.rendering import rasterization
@@ -17,13 +18,316 @@ from gsplat.rendering import rasterization
 from nerfview import CameraState, RenderTabState, apply_float_colormap
 from gsplat_viewer import GsplatViewer, GsplatRenderTabState
 
+import os
+from plyfile import PlyData
+import numpy as np
+import torch
+
+
+
+# Experimental
+def construct_list_of_attributes(splats):
+    l = ['x', 'y', 'z', 'nx', 'ny', 'nz']
+    # All channels except the 3 DC
+    for i in range(splats["sh0"].shape[1] * splats["sh0"].shape[2]):
+        l.append('f_dc_{}'.format(i))
+    for i in range(splats["shN"].shape[1] * splats["shN"].shape[2]):
+        l.append('f_rest_{}'.format(i))
+    l.append('opacity')
+    for i in range(splats["scales"].shape[1]):
+        l.append('scale_{}'.format(i))
+    for i in range(splats["quats"].shape[1]):
+        l.append('rot_{}'.format(i))
+    return l
+
+@torch.no_grad()
+def load_ply(path: str, dev) -> None:
+    plydata = PlyData.read(path)
+    v = plydata['vertex'].data  # numpy structured array
+    xyz = np.stack([v['x'], v['y'], v['z']], axis=1)            # (N,3)
+    print(f'xyz.shape : {xyz.shape}, xyz.min() : {xyz.min()}, xyz.max() : {xyz.max()}');  exit(1)    #  (138776, 3),    -12.039, 14.624
+    N = len(xyz)
+    print(f'xyz.shape : {xyz.shape}');  exit(1)
+    
+    normals = np.stack([v['nx'], v['ny'], v['nz']], axis=1)     # (N,3)
+    rgb_uint8 = np.stack([v['red'], v['green'], v['blue']], axis=1)  # (N,3) uint8
+    # 3) 필요하다면 [0,255] → [0,1] 로 스케일
+    rgb = rgb_uint8.astype(np.float32) / 255.0                  # (N,3) float32
+    # 4) torch tensor 로 변환
+    xyz_t = torch.tensor(xyz, dtype = torch.float, device = dev)       # float32
+    #normals_t = torch.from_numpy(normals.astype(np.float32), device = dev)
+    rgb_t = torch.tensor(rgb, dtype = torch.float, device = dev)
+    scales_t = torch.rand((N, 3), device = dev) * 0.02
+    quats_t = F.normalize(torch.randn((N, 4), device = dev), dim=-1)
+    opacities_t = torch.rand((N,), device = dev)
+    
+    return xyz_t, quats_t, scales_t, opacities_t, rgb_t
+
+
+
+# Within the same class as save_ply
+@torch.no_grad()
+def load_gs_ply(path: str, dev) -> None:
+    plydata = PlyData.read(path)
+
+
+    xyz = np.stack((np.asarray(plydata.elements[0]["x"]),
+                    np.asarray(plydata.elements[0]["y"]),
+                    np.asarray(plydata.elements[0]["z"])),  axis=1)
+    n_gauss = xyz.shape[0]; 
+    features_dc = np.zeros((n_gauss, 3, 1))
+    features_dc[:, 0, 0] = np.asarray(plydata.elements[0]["f_dc_0"])
+    features_dc[:, 1, 0] = np.asarray(plydata.elements[0]["f_dc_1"])
+    features_dc[:, 2, 0] = np.asarray(plydata.elements[0]["f_dc_2"])
+    #print(f'features_dc.min() : {features_dc.min()}, features_dc.max() : {features_dc.max()}');    exit(1) #   -1.918, 37.269
+
+    opacities = np.asarray(plydata.elements[0]["opacity"])[..., np.newaxis]
+    #print(f'opacities.shape : {opacities.shape}, opacities.min() : {opacities.min()}, opacities.max() : {opacities.max()}');    exit(1)
+    #   (11237741, 1),  -5.3, 17.253
+    #opacities *= 0.5 * 0.5 * 0.5
+    opacities = rand((n_gauss,), device = dev)
+    #opacities = opacities.clip(0, 1)
+
+    extra_f_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("f_rest_")]
+    extra_f_names = sorted(extra_f_names, key = lambda x: int(x.split('_')[-1]))
+    if extra_f_names:
+        assert len(extra_f_names) == 3 * (self.max_sh_degree + 1) ** 2 - 3
+        features_extra = np.zeros((xyz.shape[0], len(extra_f_names)))
+        for idx, attr_name in enumerate(extra_f_names):
+            features_extra[:, idx] = np.asarray(plydata.elements[0][attr_name])
+    # Reshape (P,F*SH_coeffs) to (P, F, SH_coeffs except DC)
+        features_extra = features_extra.reshape((features_extra.shape[0], 3, (self.max_sh_degree + 1) ** 2 - 1))
+        Tfeatures_rest = torch.tensor(features_extra, dtype = torch.float, device = dev).transpose(1, 2).contiguous()
+    else:
+        Tfeatures_rest = None
+    
+    #skale_scale = 1.0 / 4.0
+    skale_scale = 1.0
+    scale_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("scale_")]
+    scale_names = sorted(scale_names, key = lambda x: int(x.split('_')[-1]))
+    scales = np.zeros((xyz.shape[0], len(scale_names)))
+    for idx, attr_name in enumerate(scale_names):
+        scales[:, idx] = np.asarray(plydata.elements[0][attr_name]) * skale_scale
+
+    #print(f'scales.min() : {scales.min()}, scales.max() : {scales.max()}');    exit(1) #   -27.74, 15.6
+    rot_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("rot")]
+    rot_names = sorted(rot_names, key = lambda x: int(x.split('_')[-1]))
+    rots = np.zeros((xyz.shape[0], len(rot_names)))
+    for idx, attr_name in enumerate(rot_names):
+        rots[:, idx] = np.asarray(plydata.elements[0][attr_name])
+    #print(f'rots.shape : {rots.shape}, rots.min() : {rots.min()}, rots.max() : {rots.max()}');    exit(1) 
+    #   (11237741, 3), -10.47, 11.795
+
+    Txyz = torch.tensor(xyz, dtype = torch.float, device = dev)
+    #Tfeatures_dc = torch.tensor(features_dc, dtype = torch.float, device = dev).transpose(1, 2).contiguous()
+    Tfeatures_dc = torch.tensor(features_dc, dtype = torch.float, device = dev).squeeze().contiguous()
+    Topacity = torch.tensor(opacities, dtype = torch.float, device = dev).squeeze()
+    Tscaling = torch.tensor(scales, dtype = torch.float, device = dev)
+    Trotation = torch.tensor(rots, dtype = torch.float, device = dev)
+    #Tactive_sh_degree = self.max_sh_degree
+    #print(f'Txyz.shape : {Txyz.shape}');    exit(1) #   (11237741, 3)
+    #print(f'Txyz.min() : {Txyz.min()}, Txyz.max() : {Txyz.max()}');    exit(1) #   -190981.2, 52918
+    #print(f'Trotation.shape : {Trotation.shape}');    exit(1) #   (11237741, 4)
+    #print(f'Tscaling.shape : {Tscaling.shape}');    exit(1) #   (11237741, 3)
+    #print(f'Topacity.shape : {Topacity.shape}');    #exit(1) #   (112377413)
+    #print(f'Tfeatures_dc.shape : {Tfeatures_dc.shape}');    exit(1) #   (112377413, 3)
+    #print(f'Tfeatures_rest : {Tfeatures_rest}');    exit(1) #   None
+    return Txyz, Trotation, Tscaling, Topacity, Tfeatures_dc, Tfeatures_rest, 
+
+def gen_dummy_cam(dev):
+    skale = 1.0 / 4.0
+    #viewmats = torch.from_numpy(data["viewmats"]).float().to(device)
+    width = int(skale * 11310);  height = int(skale * 17310);
+    kay = np.zeros((3, 3), dtype = float);
+    kay[0, 0] = skale * 16644.23;   kay[1, 1] = skale * 16644.23;
+    kay[0, 2] = skale * 5655;       kay[1, 2] = skale * 8655;   kay[2, 2] = 1;   
+    Ks = torch.from_numpy(kay[None, :, :]).float().to(dev)
+    vm = np.zeros((4, 4), dtype = float);
+    vm[0, 0] = 1.1024e-3;   vm[0, 1] = -9.9998e-1;  vm[0, 2] = 4.678e-3
+    vm[1, 0] = -1.0000e+0;  vm[1, 1] = -1.1036e-3;  vm[1, 2] = 6.4805e-5
+    vm[2, 0] = -5.9645e-5;  vm[2, 1] = -4.6782e-3;  vm[2, 2] = -9.9999e-1
+    vm[0, 3] = -250.5565 + 300;   
+    vm[1, 3] = 766.53515 - 1000;   
+    vm[2, 3] = 1373.0609;
+    vm[3, 3] = 1.0
+    '''
+    print(f'vm b4 : \n{vm}')
+    vm = np.linalg.inv(vm)
+    print(f'vm after : \n{vm}');    exit(1)
+    '''
+    #vm[0, 3] *= -1; vm[1, 3] *= -1;  vm[2, 3] *= -1
+    vm[:3, :3] = vm[:3, :3].T
+    viewmats = torch.from_numpy(vm[None, :, :]).float().to(dev)
+    print(f'viewmats.shape : {viewmats.shape}');    #exit(1)    (1, 3, 3)
+    print(f'viewmats[0] : \n{viewmats[0]}');    #exit(1)
+    return viewmats, Ks, width, height 
 
 def main(local_rank: int, world_rank, world_size: int, args):
-    #print(f'world_size : {world_size}');    exit(1)
     torch.manual_seed(42)
     device = torch.device("cuda", local_rank)
 
-    if args.ckpt is None:
+    if args.ply:
+        #means, quats, scales, opacities, f_dc, f_rest = load_gs_ply(args.ply, device); colors = sh2rgb(f_dc).clip(0, 1)
+        means, quats, scales, opacities, colors = load_ply(args.ply, device);
+        viewmats, Ks, width, height = gen_dummy_cam(device)
+
+        assert world_size <= 2
+        means = means[world_rank::world_size].contiguous()
+        means.requires_grad = True
+        quats = quats[world_rank::world_size].contiguous()
+        quats.requires_grad = True
+        scales = scales[world_rank::world_size].contiguous()
+        scales.requires_grad = True
+        opacities = opacities[world_rank::world_size].contiguous()
+        opacities.requires_grad = True
+        colors = colors[world_rank::world_size].contiguous()
+        colors.requires_grad = True
+
+        viewmats = viewmats[world_rank::world_size][:1].contiguous()
+        Ks = Ks[world_rank::world_size][:1].contiguous()
+        
+        sh_degree = None
+        #sh_degree = 1
+        #sh_degree = 3
+        C = len(viewmats)
+        N = len(means)
+        print("rank", world_rank, "Number of Gaussians:", N, "Number of Cameras:", C)
+        #for cam_model in ['ortho', 'pinhole', 'fisheye']:
+        for cam_model in ['pinhole']:
+            render_colors, render_alphas, meta = rasterization(
+                means,  # [N, 3]
+                quats,  # [N, 4]
+                scales,  # [N, 3]
+                opacities,  # [N]
+                colors,  # [N, S, 3]
+                viewmats,  # [C, 4, 4]
+                Ks,  # [C, 3, 3]
+                width,
+                height,
+                #render_mode="RGB+D",
+                render_mode="RGB",
+                packed=False,
+                distributed=world_size > 1,
+                camera_model = cam_model,
+                sh_degree = sh_degree
+            )
+
+            C = render_colors.shape[0]
+            #assert render_colors.shape == (C, height, width, 4)
+            assert render_colors.shape == (C, height, width, 3)
+            assert render_alphas.shape == (C, height, width, 1)
+            render_colors.sum().backward()
+
+            render_rgbs = render_colors[..., 0:3]
+            #render_depths = render_colors[..., 3:4]
+            #render_depths = render_depths / render_depths.max()
+
+            # dump batch images
+            os.makedirs(args.output_dir, exist_ok=True)
+            canvas = (
+                torch.cat(
+                [
+                    render_rgbs.reshape(C * height, width, 3),
+                    #render_depths.reshape(C * height, width, 1).expand(-1, -1, 3),
+                    #render_alphas.reshape(C * height, width, 1).expand(-1, -1, 3),
+                ],
+                dim=1,
+                )
+                .detach()
+                .cpu()
+                .numpy()
+            )
+            imageio.imsave(
+                f"{args.output_dir}/render_rank_{world_rank}_{cam_model}.png",
+                (canvas * 255).astype(np.uint8),
+            )
+
+
+
+
+
+
+
+    elif args.gs_ply:
+        #means, quats, scales, opacities, f_dc, f_rest = load_gs_ply(args.ply, device); colors = sh2rgb(f_dc).clip(0, 1)
+        means, quats, scales, opacities, colors = load_gs_ply(args.gs_ply, device); colors = sh2rgb(f_dc).clip(0, 1)
+        viewmats, Ks, width, height = gen_dummy_cam(device)
+
+        assert world_size <= 2
+        means = means[world_rank::world_size].contiguous()
+        means.requires_grad = True
+        quats = quats[world_rank::world_size].contiguous()
+        quats.requires_grad = True
+        scales = scales[world_rank::world_size].contiguous()
+        scales.requires_grad = True
+        opacities = opacities[world_rank::world_size].contiguous()
+        opacities.requires_grad = True
+        colors = colors[world_rank::world_size].contiguous()
+        colors.requires_grad = True
+
+        viewmats = viewmats[world_rank::world_size][:1].contiguous()
+        Ks = Ks[world_rank::world_size][:1].contiguous()
+        
+        sh_degree = None
+        #sh_degree = 1
+        #sh_degree = 3
+        C = len(viewmats)
+        N = len(means)
+        print("rank", world_rank, "Number of Gaussians:", N, "Number of Cameras:", C)
+        #for cam_model in ['ortho', 'pinhole', 'fisheye']:
+        for cam_model in ['pinhole']:
+            render_colors, render_alphas, meta = rasterization(
+                means,  # [N, 3]
+                quats,  # [N, 4]
+                scales,  # [N, 3]
+                opacities,  # [N]
+                colors,  # [N, S, 3]
+                viewmats,  # [C, 4, 4]
+                Ks,  # [C, 3, 3]
+                width,
+                height,
+                #render_mode="RGB+D",
+                render_mode="RGB",
+                packed=False,
+                distributed=world_size > 1,
+                camera_model = cam_model,
+                sh_degree = sh_degree
+            )
+
+            C = render_colors.shape[0]
+            #assert render_colors.shape == (C, height, width, 4)
+            assert render_colors.shape == (C, height, width, 3)
+            assert render_alphas.shape == (C, height, width, 1)
+            render_colors.sum().backward()
+
+            render_rgbs = render_colors[..., 0:3]
+            #render_depths = render_colors[..., 3:4]
+            #render_depths = render_depths / render_depths.max()
+
+            # dump batch images
+            os.makedirs(args.output_dir, exist_ok=True)
+            canvas = (
+                torch.cat(
+                [
+                    render_rgbs.reshape(C * height, width, 3),
+                    #render_depths.reshape(C * height, width, 1).expand(-1, -1, 3),
+                    #render_alphas.reshape(C * height, width, 1).expand(-1, -1, 3),
+                ],
+                dim=1,
+                )
+                .detach()
+                .cpu()
+                .numpy()
+            )
+            imageio.imsave(
+                f"{args.output_dir}/render_rank_{world_rank}_{cam_model}.png",
+                (canvas * 255).astype(np.uint8),
+            )
+
+
+
+
+    elif args.ckpt is None:
         (
             means,
             quats,
@@ -50,65 +354,14 @@ def main(local_rank: int, world_rank, world_size: int, args):
 
         viewmats = viewmats[world_rank::world_size][:1].contiguous()
         Ks = Ks[world_rank::world_size][:1].contiguous()
-
-        #sh_degree = None
-        sh_degree = 3
+        
+        sh_degree = None
+        #sh_degree = 3
         C = len(viewmats)
         N = len(means)
         print("rank", world_rank, "Number of Gaussians:", N, "Number of Cameras:", C)
-        '''
-        # batched render
-        for _ in tqdm.trange(1):
-            render_colors, render_alphas, meta = rasterization(
-                means,  # [N, 3]
-                quats,  # [N, 4]
-                scales,  # [N, 3]
-                opacities,  # [N]
-                colors,  # [N, S, 3]
-                viewmats,  # [C, 4, 4]
-                Ks,  # [C, 3, 3]
-                width,
-                height,
-                #render_mode="RGB+D",
-                render_mode="RGB",
-                packed=False,
-                distributed=world_size > 1,
-                #camera_model='ortho',
-            )
-
-        C = render_colors.shape[0]
-        #assert render_colors.shape == (C, height, width, 4)
-        assert render_colors.shape == (C, height, width, 3)
-        assert render_alphas.shape == (C, height, width, 1)
-        render_colors.sum().backward()
-
-        render_rgbs = render_colors[..., 0:3]
-        #render_depths = render_colors[..., 3:4]
-        #render_depths = render_depths / render_depths.max()
-
-        # dump batch images
-        os.makedirs(args.output_dir, exist_ok=True)
-        canvas = (
-            torch.cat(
-                [
-                    render_rgbs.reshape(C * height, width, 3),
-                    #render_depths.reshape(C * height, width, 1).expand(-1, -1, 3),
-                    #render_alphas.reshape(C * height, width, 1).expand(-1, -1, 3),
-                ],
-                dim=1,
-            )
-            .detach()
-            .cpu()
-            .numpy()
-        )
-        imageio.imsave(
-            f"{args.output_dir}/render_rank{world_rank}.png",
-            (canvas * 255).astype(np.uint8),
-        )
-
-
-        '''
-        for cam_model in ['pinhole', 'ortho', 'fisheye']:
+        #for cam_model in ['pinhole', 'ortho', 'fisheye']:
+        for cam_model in ['ortho', 'pinhole', 'fisheye']:
             render_colors, render_alphas, meta = rasterization(
                 means,  # [N, 3]
                 quats,  # [N, 4]
@@ -283,6 +536,13 @@ if __name__ == "__main__":
         --port 8082
     """
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--gs_ply", type = str, help = "3DGS ply file trained from others"
+    )
+    parser.add_argument(
+        "--ply", type = str, help = "Regular ply file trained from others"
+    )
+
     parser.add_argument(
         "--output_dir", type=str, default="results/", help="where to dump outputs"
     )
