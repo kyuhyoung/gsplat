@@ -148,6 +148,7 @@ dependencies:
   - kornia  
   - transformers 
   - pytest
+  - plyfile
   #- tensorboard
   #- cudatoolkit=11.2
   #- cudatoolkit=10.2

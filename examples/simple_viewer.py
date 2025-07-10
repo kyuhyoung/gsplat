@@ -411,23 +411,134 @@ def main(local_rank: int, world_rank, world_size: int, args):
             )
     else:
         means, quats, scales, opacities, sh0, shN = [], [], [], [], [], []
-        for ckpt_path in args.ckpt:
-            ckpt = torch.load(ckpt_path, map_location=device)["splats"]
-            means.append(ckpt["means"])
-            quats.append(F.normalize(ckpt["quats"], p=2, dim=-1))
-            scales.append(torch.exp(ckpt["scales"]))
-            opacities.append(torch.sigmoid(ckpt["opacities"]))
-            sh0.append(ckpt["sh0"])
-            shN.append(ckpt["shN"])
-        means = torch.cat(means, dim=0)
+        
+        #for ckpt_path in args.ckpt:
+        t0 = torch.load(args.ckpt[0], map_location=device)
+        '''
+        print(f'type(t0) : {type(t0)}');    #exit(1)
+        print(f't0.keys() : {t0.keys()}');    # step, splats, camtoworlds, Ks, pixels, near_plane, far_plane, sh_degree  
+        print(f'type(t0["step"]) : {type(t0["step"])}');    #exit(1)
+        print(f't0["step"] : {t0["step"]}');    exit(1)
+        '''
+        camtoworlds = t0["camtoworlds"]
+        Ks = t0["Ks"]
+        pixels = t0["pixels"]
+        near_plane = t0["near_plane"]
+        far_plane = t0["far_plane"]
+        sh_degree = t0["sh_degree"]
+        #ckpt = torch.load(ckpt_path, map_location=device)["splats"]
+        ckpt = t0["splats"]
+        print(f'type(ckpt) : {type(ckpt)}');    #exit(1)
+        #print(f'ckpt.items() : {ckpt.items()}');    exit(1)
+        #means.append(ckpt["means"])
+        means = ckpt["means"]
+        #quats.append(F.normalize(ckpt["quats"], p=2, dim=-1))
+        quats = F.normalize(ckpt["quats"], p=2, dim=-1)
+        #scales.append(torch.exp(ckpt["scales"]))
+        scales = torch.exp(ckpt["scales"])
+        #opacities.append(torch.sigmoid(ckpt["opacities"]))
+        opacities = torch.sigmoid(ckpt["opacities"])
+        #sh0.append(ckpt["sh0"])
+        sh0 = ckpt["sh0"]
+        #shN.append(ckpt["shN"])
+        shN = ckpt["shN"]
+        print(f'means.shape : {means.shape}');  #exit(1) #   1868859, 3
+        print(f'quats.shape : {quats.shape}');  #exit(1) #   1868859, 3
+        print(f'scales.shape : {scales.shape}');  #exit(1) #   1868859, 3
+        print(f'opacities.shape : {opacities.shape}');  exit(1) #   1868859, 3
+
+        #means = torch.cat(means, dim=0)
         quats = torch.cat(quats, dim=0)
         scales = torch.cat(scales, dim=0)
         opacities = torch.cat(opacities, dim=0)
         sh0 = torch.cat(sh0, dim=0)
         shN = torch.cat(shN, dim=0)
         colors = torch.cat([sh0, shN], dim=-2)
-        sh_degree = int(math.sqrt(colors.shape[-2]) - 1)
+        #sh_degree = int(math.sqrt(colors.shape[-2]) - 1)
         print("Number of Gaussians:", len(means))
+
+
+
+
+        c2w = camtoworlds[0] 
+        K = Ks[0]
+        c2w = torch.from_numpy(c2w).float().to(device)
+        K = torch.from_numpy(K).float().to(device)
+        viewmat = c2w.inverse()
+
+        RENDER_MODE_MAP = {
+            "rgb": "RGB",
+            "depth(accumulated)": "D",
+            "depth(expected)": "ED",
+            "alpha": "RGB",
+        }
+
+        render_colors, render_alphas, info = rasterization(
+            means,  # [N, 3]
+            quats,  # [N, 4]
+            scales,  # [N, 3]
+            opacities,  # [N]
+            colors,  # [N, S, 3]
+            viewmat[None],  # [1, 4, 4]
+            K[None],  # [1, 3, 3]
+            width,
+            height,
+            sh_degree=(
+                min(render_tab_state.max_sh_degree, sh_degree)
+                if sh_degree is not None
+                else None
+            ),
+            near_plane=render_tab_state.near_plane,
+            far_plane=render_tab_state.far_plane,
+            radius_clip=render_tab_state.radius_clip,
+            eps2d=render_tab_state.eps2d,
+            backgrounds=torch.tensor([render_tab_state.backgrounds], device=device)
+            / 255.0,
+            render_mode=RENDER_MODE_MAP[render_tab_state.render_mode],
+            rasterize_mode=render_tab_state.rasterize_mode,
+            camera_model=render_tab_state.camera_model,
+            packed=False,
+            with_ut=args.with_ut,
+            with_eval3d=args.with_eval3d,
+        )
+        render_tab_state.total_gs_count = len(means)
+        render_tab_state.rendered_gs_count = (info["radii"] > 0).all(-1).sum().item()
+
+        if render_tab_state.render_mode == "rgb":
+            # colors represented with sh are not guranteed to be in [0, 1]
+            render_colors = render_colors[0, ..., 0:3].clamp(0, 1)
+            renders = render_colors.cpu().numpy()
+        elif render_tab_state.render_mode in ["depth(accumulated)", "depth(expected)"]:
+            # normalize depth to [0, 1]
+            depth = render_colors[0, ..., 0:1]
+            if render_tab_state.normalize_nearfar:
+                near_plane = render_tab_state.near_plane
+                far_plane = render_tab_state.far_plane
+            else:
+                near_plane = depth.min()
+                far_plane = depth.max()
+            depth_norm = (depth - near_plane) / (far_plane - near_plane + 1e-10)
+            depth_norm = torch.clip(depth_norm, 0, 1)
+            if render_tab_state.inverse:
+                depth_norm = 1 - depth_norm
+            renders = (
+                apply_float_colormap(depth_norm, render_tab_state.colormap)
+                .cpu()
+                .numpy()
+            )
+        elif render_tab_state.render_mode == "alpha":
+            alpha = render_alphas[0, ..., 0:1]
+            renders = (
+                apply_float_colormap(alpha, render_tab_state.colormap).cpu().numpy()
+            )
+        return renders
+
+
+
+
+
+
+
 
     # register and open viewer
     @torch.no_grad()

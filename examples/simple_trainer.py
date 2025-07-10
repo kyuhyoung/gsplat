@@ -58,7 +58,7 @@ class Config:
     # Downsample factor for the dataset
     data_factor: int = 4
     # Directory to save results
-    result_dir: str = "./results/samsung_dong_mini_5"
+    result_dir: str = "./results/samsung_dong_mini_5_default"
     # Every N images there is a test image
     test_every: int = 8
     # Random crop size for training  (experimental)
@@ -81,16 +81,29 @@ class Config:
 
     # Number of training steps
     max_steps: int = 30_000
+    '''
     # Steps to evaluate the model
     eval_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
     # Steps to save the model
     save_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
-    # Whether to save ply file (storage size can be large)
-    save_ply: bool = False
     # Steps to save the model as ply
     ply_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
+    '''
+    # Steps to evaluate the model
+    eval_steps: List[int] = field(default_factory=lambda: [700, 2_000, 7_000, 30_000])
+    # Steps to save the model
+    save_steps: List[int] = field(default_factory=lambda: [700, 2_000, 7_000, 30_000])
+   
+    # Steps to save the model as ply
+    ply_steps: List[int] = field(default_factory=lambda: [700, 2_000, 7_000, 30_000])
+
+
+    # Whether to save ply file (storage size can be large)
+    #save_ply: bool = False
+    save_ply: bool = True
     # Whether to disable video generation during training and evaluation
-    disable_video: bool = False
+    #disable_video: bool = False
+    disable_video: bool = True
 
     # Initialization strategy
     init_type: str = "sfm"
@@ -234,7 +247,12 @@ def create_splats_with_optimizers(
     world_rank: int = 0,
     world_size: int = 1,
 ) -> Tuple[torch.nn.ParameterDict, Dict[str, torch.optim.Optimizer]]:
+    #print(f'init_type : {init_type}');  exit(1)    #   sfm
     if init_type == "sfm":
+        #print(f'parser.points.shape : {parser.points.shape}, parser.points.min() : {parser.points.min()}, parser.points.max() : {parser.points.max()}'); 
+        #   (25263, 3), -532, 1475.2   
+        #print(f'parser.points_rgb.shape : {parser.points_rgb.shape}, parser.points_rgb.min() : {parser.points_rgb.min()}, parser.points_rgb.max() : {parser.points_rgb.max()}'); exit()   
+        #   (25263, 3), 13, 255   
         points = torch.from_numpy(parser.points).float()
         rgbs = torch.from_numpy(parser.points_rgb / 255.0).float()
     elif init_type == "random":
@@ -256,7 +274,8 @@ def create_splats_with_optimizers(
     N = points.shape[0]
     quats = torch.rand((N, 4))  # [N, 4]
     opacities = torch.logit(torch.full((N,), init_opacity))  # [N,]
-
+    #print(f'means_lr : {means_lr}, scene_scale : {scene_scale}');   exit(1)
+    #   0.00016, 400.4
     params = [
         # name, value, lr
         ("means", torch.nn.Parameter(points), means_lr * scene_scale),
@@ -348,10 +367,11 @@ class Runner:
         )
         self.valset = Dataset(self.parser, split="val")
         self.scene_scale = self.parser.scene_scale * 1.1 * cfg.global_scale
-        print("self.parser.scene_scale : ", self.parser.scene_scale)
-        print("cfg.global_scale : ", cfg.global_scale)
-        print("Scene scale:", self.scene_scale);    exit(1)
-
+        '''
+        print("self.parser.scene_scale : ", self.parser.scene_scale)    #   364
+        print("cfg.global_scale : ", cfg.global_scale)  #   1.0
+        print("Scene scale:", self.scene_scale);    exit(1) #   400.4
+        '''
         # Model
         feature_dim = 32 if cfg.app_opt else None
         self.splats, self.optimizers = create_splats_with_optimizers(
@@ -538,7 +558,8 @@ class Runner:
             sparse_grad=self.cfg.sparse_grad,
             rasterize_mode=rasterize_mode,
             distributed=self.world_size > 1,
-            camera_model=self.cfg.camera_model,
+            #camera_model=self.cfg.camera_model,
+            camera_model=camera_model,
             with_ut=self.cfg.with_ut,
             with_eval3d=self.cfg.with_eval3d,
             **kwargs,
@@ -605,6 +626,10 @@ class Runner:
         global_tic = time.time()
         pbar = tqdm.tqdm(range(init_step, max_steps))
         for step in pbar:
+            n_gau = len(self.splats["means"]);  xyz_min = self.splats["means"].min();   xyz_max = self.splats["means"].max()
+            #print(f'step : {step}');    exit(1)
+            if 0 == step:
+                n_gau_init = n_gau; min_init = xyz_min; max_init = xyz_max
             if not cfg.disable_viewer:
                 while self.viewer.state == "paused":
                     time.sleep(0.01)
@@ -618,6 +643,7 @@ class Runner:
                 data = next(trainloader_iter)
 
             camtoworlds = camtoworlds_gt = data["camtoworld"].to(device)  # [1, 4, 4]
+            #print(f'camtoworlds.shape : {camtoworlds.shape}');   exit(1)    #   (1, 4, 4)
             Ks = data["K"].to(device)  # [1, 3, 3]
             pixels = data["image"].to(device) / 255.0  # [1, H, W, 3]
             num_train_rays_per_step = (
@@ -720,8 +746,8 @@ class Runner:
                 loss += cfg.scale_reg * torch.exp(self.splats["scales"]).mean()
 
             loss.backward()
-
-            desc = f"loss={loss.item():.3f}| " f"sh degree={sh_degree_to_use}| "
+            desc = f"n_gau={n_gau}/{n_gau_init}| " f"min={xyz_min:.1f}/{min_init:.1f}| " f"max={xyz_max:.1f}/{max_init:.1f}| " f"loss={loss.item():.3f}| " f"sh degree={sh_degree_to_use}| "
+            #desc = f"loss={loss.item():.3f}| " f"sh degree={sh_degree_to_use}| "
             if cfg.depth_loss:
                 desc += f"depth loss={depthloss.item():.6f}| "
             if cfg.pose_opt and cfg.pose_noise:
@@ -770,7 +796,8 @@ class Runner:
                     "w",
                 ) as f:
                     json.dump(stats, f)
-                data = {"step": step, "splats": self.splats.state_dict()}
+                #data = {"step": step, "splats": self.splats.state_dict()}
+                data = {"step": step, "splats": self.splats.state_dict(), "camtoworlds": camtoworlds, "Ks": Ks, "pixels": pixels, "near_plane": cfg.near_plane, "far_plane": cfg.far_plane, "sh_degree": sh_degree_to_use}
                 if cfg.pose_opt:
                     if world_size > 1:
                         data["pose_adjust"] = self.pose_adjust.module.state_dict()

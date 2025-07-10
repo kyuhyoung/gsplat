@@ -347,8 +347,8 @@ class Parser:
         camera_locations = camtoworlds[:, :3, 3]
         scene_center = np.mean(camera_locations, axis=0)
         dists = np.linalg.norm(camera_locations - scene_center, axis=1)
-        pr
-        self.scene_scale = np.max(dists)
+        #print(f'dists : {dists}');  exit(1) #   364, 180, 2.3, 179, 363
+        self.scene_scale = np.max(dists)    #   364
 
 
 class Dataset:
