@@ -523,6 +523,7 @@ def rasterization(
             campos = 0.5 * (campos + campos_rs)  # [..., C, 3]
         if packed:
             if "ortho" == camera_model:
+                '''
                 camera_dirs = F.pad(
                     torch.stack(
                         [
@@ -536,7 +537,14 @@ def rasterization(
                 )  
                 dirs = torch.einsum(
                     "...ij,...hwj->...hwi", camtoworlds[..., :3, :3], camera_dirs
-                ) 
+                )
+                '''
+                dirs = (
+                    means.view(B, N, 3)[batch_ids, gaussian_ids]
+                    - campos.view(B, C, 3)[batch_ids, camera_ids]
+                )  # [nnz, 3]
+
+
             else:
                 dirs = (
                     means.view(B, N, 3)[batch_ids, gaussian_ids]
@@ -554,6 +562,7 @@ def rasterization(
             colors = spherical_harmonics(sh_degree, dirs, shs, masks=masks)  # [nnz, 3]
         else:
             if "ortho" == camera_model:
+                '''
                 camera_dirs = F.pad(
                     torch.stack(
                         [
@@ -564,10 +573,13 @@ def rasterization(
                     ),
                     (0, 1),
                     value=1.0,
-                )  
+                ) 
+                
                 dirs = torch.einsum(
                     "...ij,...hwj->...hwi", camtoworlds[..., :3, :3], camera_dirs
-                ) 
+                )
+                '''
+                dirs = means[..., None, :, :] - campos[..., None, :]  # [..., C, N, 3]
             else:
                 dirs = means[..., None, :, :] - campos[..., None, :]  # [..., C, N, 3]
                 #print(f'dirs : {dirs}');    exit(1)

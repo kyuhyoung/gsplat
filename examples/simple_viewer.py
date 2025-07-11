@@ -360,8 +360,8 @@ def main(local_rank: int, world_rank, world_size: int, args):
         C = len(viewmats)
         N = len(means)
         print("rank", world_rank, "Number of Gaussians:", N, "Number of Cameras:", C)
-        #for cam_model in ['pinhole', 'ortho', 'fisheye']:
-        for cam_model in ['ortho', 'pinhole', 'fisheye']:
+        for cam_model in ['pinhole', 'fisheye', 'ortho']:
+        #for cam_model in ['ortho', 'pinhole', 'fisheye']:
             render_colors, render_alphas, meta = rasterization(
                 means,  # [N, 3]
                 quats,  # [N, 4]
@@ -384,7 +384,7 @@ def main(local_rank: int, world_rank, world_size: int, args):
             #assert render_colors.shape == (C, height, width, 4)
             assert render_colors.shape == (C, height, width, 3)
             assert render_alphas.shape == (C, height, width, 1)
-            render_colors.sum().backward()
+            #render_colors.sum().backward()
 
             render_rgbs = render_colors[..., 0:3]
             #render_depths = render_colors[..., 3:4]
@@ -422,10 +422,21 @@ def main(local_rank: int, world_rank, world_size: int, args):
         '''
         camtoworlds = t0["camtoworlds"]
         Ks = t0["Ks"]
+        print(f'Ks : {Ks}');
+        print(f'camtoworlds : {camtoworlds}');  #exit(1)
         pixels = t0["pixels"]
+        height, width = pixels[0].shape[:2]
+        print(f'width : {width}, height : {height}');   #exit(1)
         near_plane = t0["near_plane"]
         far_plane = t0["far_plane"]
         sh_degree = t0["sh_degree"]
+        print(f'camtoworlds.shape : {camtoworlds.shape}');  #exit(1) #   1868859, 3
+        print(f'Ks.shape : {Ks.shape}');  #exit(1) #   1868859, 3
+        print(f'pixels.shape : {pixels.shape}');  #exit(1) #   1868859, 3
+        #print(f'opacities.shape : {opacities.shape}');  #exit(1) #   1868859, 3
+
+
+
         #ckpt = torch.load(ckpt_path, map_location=device)["splats"]
         ckpt = t0["splats"]
         print(f'type(ckpt) : {type(ckpt)}');    #exit(1)
@@ -445,26 +456,83 @@ def main(local_rank: int, world_rank, world_size: int, args):
         print(f'means.shape : {means.shape}');  #exit(1) #   1868859, 3
         print(f'quats.shape : {quats.shape}');  #exit(1) #   1868859, 3
         print(f'scales.shape : {scales.shape}');  #exit(1) #   1868859, 3
-        print(f'opacities.shape : {opacities.shape}');  exit(1) #   1868859, 3
+        print(f'opacities.shape : {opacities.shape}');  #exit(1) #   1868859, 3
 
         #means = torch.cat(means, dim=0)
-        quats = torch.cat(quats, dim=0)
-        scales = torch.cat(scales, dim=0)
-        opacities = torch.cat(opacities, dim=0)
-        sh0 = torch.cat(sh0, dim=0)
-        shN = torch.cat(shN, dim=0)
+        #quats = torch.cat(quats, dim=0)
+        #scales = torch.cat(scales, dim=0)
+        #opacities = torch.cat(opacities, dim=0)
+        opacities = opacities
+        #sh0 = torch.cat(sh0, dim=0)
+        sh0 = sh0
+        #shN = torch.cat(shN, dim=0)
+        shN = shN
         colors = torch.cat([sh0, shN], dim=-2)
         #sh_degree = int(math.sqrt(colors.shape[-2]) - 1)
         print("Number of Gaussians:", len(means))
 
+        c2w = camtoworlds.float().to(device) 
+        K = Ks.float().to(device)
+        #c2w = torch.from_numpy(c2w).float().to(device)
+        #K = torch.from_numpy(K).float().to(device)
+        viewmats = c2w.inverse()
 
+        #for cam_model in ['ortho', 'pinhole', 'fisheye']:
+        for cam_model in ['pinhole', 'fisheye', 'ortho']:
+        #for cam_model in ['pinhole', 'fisheye']:
+        #for cam_model in ['pinhole']:
+        #for cam_model in ['ortho']:
+            print(f'processing {cam_model} camera model')
+            #print(f'means.shape : {means.shape}');  exit(1)
+            render_colors, render_alphas, meta = rasterization(
+                means,  # [N, 3]
+                quats,  # [N, 4]
+                scales,  # [N, 3]
+                opacities,  # [N]
+                colors,  # [N, S, 3]
+                viewmats,  # [C, 4, 4]
+                Ks,  # [C, 3, 3]
+                width,
+                height,
+                #render_mode="RGB+D",
+                render_mode="RGB",
+                packed=False,
+                distributed=world_size > 1,
+                camera_model = cam_model,
+                sh_degree = sh_degree
+            )
 
+            C = render_colors.shape[0]
+            #assert render_colors.shape == (C, height, width, 4)
+            assert render_colors.shape == (C, height, width, 3)
+            assert render_alphas.shape == (C, height, width, 1)
+            #render_colors.sum().backward()
 
-        c2w = camtoworlds[0] 
-        K = Ks[0]
-        c2w = torch.from_numpy(c2w).float().to(device)
-        K = torch.from_numpy(K).float().to(device)
-        viewmat = c2w.inverse()
+            render_rgbs = render_colors[..., 0:3]
+            #render_depths = render_colors[..., 3:4]
+            #render_depths = render_depths / render_depths.max()
+
+            # dump batch images
+            os.makedirs(args.output_dir, exist_ok=True)
+            canvas = (
+                torch.cat(
+                [
+                    render_rgbs.reshape(C * height, width, 3),
+                    #render_depths.reshape(C * height, width, 1).expand(-1, -1, 3),
+                    #render_alphas.reshape(C * height, width, 1).expand(-1, -1, 3),
+                ],
+                dim=1,
+                )
+                .detach()
+                .cpu()
+                .numpy()
+            )
+            imageio.imsave(
+                f"{args.output_dir}/render_rank_{world_rank}_{cam_model}.png",
+                (canvas * 255).astype(np.uint8),
+            )
+        exit(1)
+
 
         RENDER_MODE_MAP = {
             "rgb": "RGB",

@@ -9,6 +9,86 @@ namespace gsplat {
 
 namespace cg = cooperative_groups;
 
+// device 함수: vec2 출력
+inline __device__ void devPrintVec2(const char* name, const vec2 v) {
+    // v.x, v.y 로 접근
+    printf("%s = (%f, %f)\n", name, v.x, v.y);
+}
+
+
+// device 함수: vec3 출력
+inline __device__ void devPrintVec3(const char* name, const vec3 v) {
+    // v.x, v.y, v.z 로 접근
+    printf("%s = (%f, %f, %f)\n", name, v.x, v.y, v.z);
+}
+
+// device 함수: vec4 출력
+inline __device__ void devPrintVec4(const char* name, const vec4 v) {
+    // v.x, v.y, v.z 로 접근
+    printf("%s = (%f, %f, %f, %f)\n", name, v.x, v.y, v.z, v.w);
+}
+
+// device 함수: mat2 출력 (column-major)
+inline __device__ void devPrintMat2(const char* name, const mat2 M) {
+    printf("%s = \n[\n", name);
+    // GLM 은 컬럼 우선 저장, M[col][row] 로 (row,col) 접근
+    for (int row = 0; row < 2; ++row) {
+        printf("  [");
+        for (int col = 0; col < 2; ++col) {
+            printf("%f", M[col][row]);
+            if (col < 1) printf(", ");
+        }
+        printf("]\n");
+    }
+    printf("]\n");
+}
+
+
+
+// device 함수: mat3 출력 (column-major)
+inline __device__ void devPrintMat3(const char* name, const mat3 M) {
+    printf("%s = \n[\n", name);
+    // GLM 은 컬럼 우선 저장, M[col][row] 로 (row,col) 접근
+    for (int row = 0; row < 3; ++row) {
+        printf("  [");
+        for (int col = 0; col < 3; ++col) {
+            printf("%f", M[col][row]);
+            if (col < 2) printf(", ");
+        }
+        printf("]\n");
+    }
+    printf("]\n");
+}
+
+// device 함수: mat3 출력 (column-major)
+inline __device__ void devPrintMat4(const char* name, const mat4 M) {
+    printf("%s = \n[\n", name);
+    // GLM 은 컬럼 우선 저장, M[col][row] 로 (row,col) 접근
+    for (int row = 0; row < 4; ++row) {
+        printf("  [");
+        for (int col = 0; col < 4; ++col) {
+            printf("%f", M[col][row]);
+            if (col < 3) printf(", ");
+        }
+        printf("]\n");
+    }
+    printf("]\n");
+}
+
+
+
+inline __device__ const char* CameraModelTypeName(CameraModelType t) {
+    switch(t) {
+        case PINHOLE: return "PINHOLE";
+        case ORTHO:   return "ORTHO";
+        case FISHEYE: return "FISHEYE";
+        default:      return "UNKNOWN";
+    }
+}
+
+
+
+
 ///////////////////////////////
 // Coordinate Transformations
 ///////////////////////////////
@@ -453,6 +533,18 @@ inline __device__ void ortho_proj(
     );
     cov2d = J * cov3d * glm::transpose(J);
     mean2d = vec2({fx * x + cx, fy * y + cy});
+
+    if (0 == threadIdx.x && 0 == blockIdx.x)
+    {
+        printf("\northo type, fx : %f, fy : %f, cx : %f, cy : %f, width : %d, height : %d\n", fx, fy, cx, cy, width, height); 
+
+        devPrintVec3("mean3d", mean3d);    
+        //devPrintMat3("cov3d", cov3d);  
+        devPrintVec2("mean2d", mean2d);    
+        devPrintMat2("cov2d", cov2d);    
+    }
+
+
 }
 
 inline __device__ void ortho_proj_vjp(
@@ -534,6 +626,14 @@ inline __device__ void persp_proj(
     );
     cov2d = J * cov3d * glm::transpose(J);
     mean2d = vec2({fx * x * rz + cx, fy * y * rz + cy});
+    if (0 == threadIdx.x && 0 == blockIdx.x)
+    {
+        printf("\npinhole type, fx : %f, fy : %f, cx : %f, cy : %f, width : %d, height : %d\n", fx, fy, cx, cy, width, height); 
+        devPrintVec3("mean3d", mean3d);    
+        //devPrintMat3("cov3d", cov3d);  
+        devPrintVec2("mean2d", mean2d);    
+        devPrintMat2("cov2d", cov2d);    
+    }
 }
 
 inline __device__ void persp_proj_vjp(
@@ -653,6 +753,16 @@ inline __device__ void fisheye_proj(
         -fy * y * x2y2z2_inv
     );
     cov2d = J * cov3d * glm::transpose(J);
+    if (0 == threadIdx.x && 0 == blockIdx.x)
+    {
+        printf("\nfisheye type, fx : %f, fy : %f, cx : %f, cy : %f, width : %d, height : %d\n", fx, fy, cx, cy, width, height); 
+        devPrintVec3("mean3d", mean3d);    
+        //devPrintMat3("cov3d", cov3d);  
+        devPrintVec2("mean2d", mean2d);    
+        devPrintMat2("cov2d", cov2d);    
+    }
+
+
 }
 
 inline __device__ void fisheye_proj_vjp(

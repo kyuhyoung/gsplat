@@ -1,8 +1,10 @@
 #pragma once
 
+#define GLM_ENABLE_EXPERIMENTAL
 #include <algorithm>
 #include <cstdint>
 #include <glm/gtc/type_ptr.hpp>
+//#include <glm/gtx/string_cast.hpp>
 
 namespace gsplat {
 
@@ -40,6 +42,24 @@ using mat3 = glm::mat<3, 3, float>;
 using mat4 = glm::mat<4, 4, float>;
 using mat3x2 = glm::mat<3, 2, float>;
 
+
+inline std::ostream& operator<<(std::ostream& os, glm::vec<3,float> const& v) {
+    return os << "("<<v.x<<", "<<v.y<<", "<<v.z<<")";
+}
+
+inline std::ostream& operator<<(std::ostream& os, glm::mat<3,3,float> const& m) {
+    os << "[\n";
+    for(int r=0; r<3; ++r) {
+        os << "  ";
+        for(int c=0; c<3; ++c) {
+            os << m[c][r] << (c<2?", ":"");
+        }
+        os << "\n";
+    }
+    return os << "]";
+}
+
+
 //
 // Legacy Camera Types
 //
@@ -48,6 +68,8 @@ enum CameraModelType {
     ORTHO = 1,
     FISHEYE = 2,
 };
+
+
 
 #define N_THREADS_PACKED 256
 #define ALPHA_THRESHOLD (1.f / 255.f)

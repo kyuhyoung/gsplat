@@ -12,6 +12,9 @@ namespace gsplat {
 
 namespace cg = cooperative_groups;
 
+
+
+
 template <typename scalar_t>
 __global__ void projection_ewa_3dgs_fused_fwd_kernel(
     const uint32_t B,
@@ -66,12 +69,23 @@ __global__ void projection_ewa_3dgs_fused_fwd_kernel(
     );
     vec3 t = vec3(viewmats[3], viewmats[7], viewmats[11]);
 
+    //std::cout << "R =\n"  << R << "\n" << "t = " << t << std::endl;   exit(1);
+    /*
+    if (0 == threadIdx.x && 0 == blockIdx.x)
+    {
+        devPrintMat3("R", R);   devPrintVec3("t", t);  
+    }
+    */
     // transform Gaussian center to camera space
     vec3 mean_c;
     posW2C(R, t, glm::make_vec3(means), mean_c);
+    
+    //if (0 == threadIdx.x && 0 == blockIdx.x) printf("camera_model : %s, mean_c.z %f, near_plane : %f, far_plane : %f\n", CameraModelTypeName(camera_model), mean_c.z, near_plane, far_plane);
+    
     if (mean_c.z < near_plane || mean_c.z > far_plane) {
         radii[idx * 2] = 0;
         radii[idx * 2 + 1] = 0;
+        //printf("camera_model : %s, mean_c.z %f, near_plane : %f, far_plane : %f\n", CameraModelTypeName(camera_model), mean_c.z, near_plane, far_plane);
         return;
     }
 
@@ -238,6 +252,8 @@ void launch_projection_ewa_3dgs_fused_fwd_kernel(
     uint32_t N = means.size(-2);    // number of gaussians
     uint32_t C = viewmats.size(-3); // number of cameras
     uint32_t B = means.numel() / (N * 3);    // number of batches
+    //std::cout << "means.sizes() : " << means.sizes() << std::endl; // [1868859, 3]
+    //std::cout << "N : " << N << ", C : " << C << ", B : " << B << std::endl; // 1868859, 1, 1
 
     int64_t n_elements = B * C * N;
     dim3 threads(256);
